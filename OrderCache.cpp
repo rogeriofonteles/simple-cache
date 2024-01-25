@@ -1,20 +1,21 @@
 // Your implementation of the OrderCache...
 #include "OrderCache.h"
 
+
 void OrderCache::addOrder(Order order) {
-  // Todo...
+  cache_.addOrderOnCache(std::move(order));
 }
 
 void OrderCache::cancelOrder(const std::string& orderId) {
-  // Todo...
+  cache_.removeFromCacheByOrderId(orderId);
 }
 
 void OrderCache::cancelOrdersForUser(const std::string& user) {
-  // Todo...
+  cache_.removeFromCacheByUserName(user);
 }
 
 void OrderCache::cancelOrdersForSecIdWithMinimumQty(const std::string& securityId, unsigned int minQty) {
-  // Todo...
+  cache_.removeFromCacheBySecId(securityId, minQty);
 }
 
 unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityId) {
@@ -22,5 +23,5 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
 }
 
 std::vector<Order> OrderCache::getAllOrders() const {
-  // Todo...
+  return cache_.getOrdersFromCacheAsVec();
 }

@@ -1,7 +1,14 @@
 #pragma once
 
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+
+#include "Cache.h"
 
 class Order
 {
@@ -42,6 +49,42 @@ class Order
   std::string m_user;        // user name who owns this order
   std::string m_company;     // company for user
 
+};
+
+class Cache
+{
+  using UserName = std::string;
+  using OrderId = std::string;
+  using SecId = std::string;
+  using OrderSide = std::string;
+
+public:
+  Cache();  
+  void addOrderOnCache(Order&& order);
+  void removeFromCacheByOrderId(const OrderId& order_id);
+  void removeFromCacheByUserName(const UserName& user_name);
+  void removeFromCacheBySecId(const SecId& security_id, unsigned int min_qty);
+  std::vector<Order> getOrdersFromCacheAsVec() const;
+
+private:
+  struct ValueComparator {
+      bool operator()(const std::pair<int, std::weak_ptr<Order>>& a, 
+          const std::pair<int, std::weak_ptr<Order>>& b) const {
+        auto a_order_ptr = a.second.lock();
+        auto b_order_ptr = b.second.lock();
+        return a_order_ptr->qty() < b_order_ptr->qty();
+      }
+  };
+
+  // Indexes
+  std::unordered_map<UserName, std::unordered_map<OrderId, std::weak_ptr<Order>>> user_index_;
+  std::unordered_map<SecId, 
+      std::unordered_map<OrderSide, std::map<OrderId, std::weak_ptr<Order>, 
+      ValueComparator>>> security_index_;
+  // Order Storage
+  std::unordered_map<OrderId, std::shared_ptr<Order>> order_map_;
+  // Mutex
+  mutable std::mutex mtx_;
 };
 
 class OrderCacheInterface
@@ -90,4 +133,7 @@ class OrderCache : public OrderCacheInterface
   unsigned int getMatchingSizeForSecurity(const std::string& securityId) override;
   
   std::vector<Order> getAllOrders() const override;
+
+private:
+  Cache cache_;
 };
