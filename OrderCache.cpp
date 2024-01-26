@@ -19,7 +19,7 @@ void OrderCache::cancelOrdersForSecIdWithMinimumQty(const std::string& securityI
 }
 
 unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityId) {
-  // Todo...
+  return cache_.getMatchingSizeForSecurity(securityId);
 }
 
 std::vector<Order> OrderCache::getAllOrders() const {
