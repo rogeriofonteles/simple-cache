@@ -3,8 +3,11 @@
 #include <algorithm>
 
 size_t Cache::toOrderSide(const std::string side_str) {
-  if (side_str == "Buy") return static_cast<size_t>(OrderSide::BUY);
-  if (side_str == "Sell") return static_cast<size_t>(OrderSide::SELL);
+  std::string _lower_case_side_str;
+  std::transform(side_str.begin(), side_str.end(), std::back_inserter(_lower_case_side_str), ::tolower);
+
+  if (_lower_case_side_str == "buy") return static_cast<size_t>(OrderSide::BUY);
+  if (_lower_case_side_str == "sell") return static_cast<size_t>(OrderSide::SELL);
   else throw std::exception();
 }
 
@@ -12,9 +15,9 @@ void Cache::addOrderOnCache(Order&& order) {
   std::lock_guard<std::mutex> lck(mtx_);
 
   auto order_ptr = std::make_shared<Order>(std::move(order));
-  order_map_[order.orderId()] = order_ptr;
-  user_index_[order.user()][order.orderId()] = order_ptr;
-  security_index_[order.securityId()][toOrderSide(order.side())][order.orderId()] = order_ptr;
+  order_map_[order_ptr->orderId()] = order_ptr;
+  user_index_[order_ptr->user()][order_ptr->orderId()] = order_ptr;
+  security_index_[order_ptr->securityId()][toOrderSide(order_ptr->side())][order_ptr->orderId()] = order_ptr;
 }
 
 void Cache::removeFromCacheByOrderId(const OrderId& order_id) {
@@ -118,7 +121,8 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
   auto sell_order_ptr = company_sell_orders_it->lock();
   if (buy_order_ptr && sell_order_ptr) { 
     if (buy_order_ptr->company() == sell_order_ptr->company()) {
-      auto is_valid = makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first);
+      auto is_valid = 
+          makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first);
       if (!is_valid) {
         return 0;
       }
@@ -174,9 +178,9 @@ std::vector<Order> Cache::getOrdersFromCacheAsVec() const {
   std::lock_guard<std::mutex> lck(mtx_);
 
   std::vector<Order> orders;
-  std::transform(order_map_.begin(), order_map_.end(), orders.end(), 
+  std::transform(order_map_.begin(), order_map_.end(), std::back_inserter(orders), 
       [](const auto& pair){
-        return *pair.second;
+        return *(pair.second);
       });
   return orders;
 }
