@@ -11,7 +11,7 @@ include(CTest)
 include_directories(${GTEST_INCLUDE_DIRS})
 enable_testing()
 
-add_library(cache_lib OrderCache.cpp Cache.cpp)
+add_library(cache_lib OrderCache.cpp)
 
 add_executable(order_cache main.cpp)
 target_link_libraries(order_cache cache_lib)
