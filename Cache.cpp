@@ -65,8 +65,7 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
   unsigned int matching_size;
 
   using CompanyName = std::string;
-  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, 2> orders_by_companies;
-  std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>::iterator> it_to_orders;
+  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, 2> orders_by_companies;  
 
   for (auto& orders_by_side : security_index_[security_id]) {
     for (auto& [_, order_wptr] : orders_by_side) {
@@ -75,11 +74,80 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
         orders_by_companies[toOrderSide(order_ptr->side())][order_ptr->company()].emplace_back(order_ptr);
       }
     }
+  }  
+  
+  std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>::iterator> last_visited_sell_order;
+  for (auto& [company, orders] :  orders_by_companies[static_cast<size_t>(OrderSide::SELL)]) {
+    last_visited_sell_order[company] = orders.begin();
   }
 
-  for (auto& orders_by_company : orders_by_companies) {
-    for (auto& [company, orders] : orders_by_company) {
-      if (company == )
+  auto buy_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::BUY)].begin();
+  auto sell_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::SELL)].begin();
+  auto company_buy_orders_it = buy_companies_it->second.begin();
+  auto company_sell_orders_it = sell_companies_it->second.begin();  
+  
+  auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it, 
+      std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companies_it,
+      const OrderSide side,
+      const bool check_for_company_name,      
+      const std::string& buy_company = "") {
+    size_t rotation = 0;
+    while ((check_for_company_name && companies_it->first == buy_company) || 
+        last_visited_sell_order[companies_it->first] == companies_it->second.end()) {
+      if (companies_it == orders_by_companies[static_cast<size_t>(side)].end()) {
+        companies_it = orders_by_companies[static_cast<size_t>(side)].begin();
+      } else {
+        companies_it++;
+      }
+      
+      rotation++;
+      if (rotation == orders_by_companies.size()) {
+       return false;
+      }
+    }
+
+    it = last_visited_sell_order[companies_it->first];
+    return true;
+  };
+
+  
+  int32_t qty_remaining = 0;
+  auto buy_order_ptr = company_buy_orders_it->lock();
+  auto sell_order_ptr = company_sell_orders_it->lock();
+  if (buy_order_ptr && sell_order_ptr) { 
+    if (buy_order_ptr->company() == sell_order_ptr->company()) {
+      auto is_valid = makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, true, sell_companies_it->first);
+      if (!is_valid) {
+        return 0;
+      }
+    }
+  }
+
+  while (true) {
+    buy_order_ptr = company_buy_orders_it->lock();
+    sell_order_ptr = company_sell_orders_it->lock();
+    if (buy_order_ptr && sell_order_ptr) { 
+      if (qty_remaining == 0) {
+        qty_remaining = buy_order_ptr->qty();
+      }
+
+      unsigned int qty_to_be_considered = (qty_remaining > 0 ? sell_order_ptr->qty() : buy_order_ptr->qty());
+      int sign = (qty_remaining > 0 ? 1 : -1);
+
+      matching_size += std::min(static_cast<unsigned int>(sign*qty_remaining), qty_to_be_considered);
+
+      if (qty_remaining - sign*qty_to_be_considered >= 0) {
+        if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, true, sell_companies_it->first)) {
+          break;
+        }
+      }
+      if (qty_remaining - sign*qty_to_be_considered <= 0) {
+        if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, false)) {
+          break;
+        }
+      }
+      
+      qty_remaining -= sign*qty_to_be_considered;
     }
   }
 
