@@ -65,7 +65,7 @@ void Cache::removeFromCacheBySecId(const SecId& security_id, unsigned int min_qt
 }
 
 unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
-  unsigned int matching_size;
+  unsigned int matching_size = 0;
 
   using CompanyName = std::string;
   std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, 2> orders_by_companies;  
@@ -77,9 +77,14 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
         orders_by_companies[toOrderSide(order_ptr->side())][order_ptr->company()].emplace_back(order_ptr);
       }
     }
-  }  
+  }
+
+  if (orders_by_companies[static_cast<size_t>(OrderSide::BUY)].size() == 0 || 
+      orders_by_companies[static_cast<size_t>(OrderSide::SELL)].size() == 0) {
+    return 0;
+  }
   
-  std::array<std::unordered_map<CompanyName, std::pair<std::vector<std::weak_ptr<Order>>::iterator, unsigned int>>, 2>
+  std::array<std::unordered_map<CompanyName, std::pair<std::vector<std::weak_ptr<Order>>::iterator, int>>, 2>
       last_visited_order;
   for (size_t i = 0; i < 2; i++) {
     for (auto& [company, orders] :  orders_by_companies[i]) {
@@ -90,24 +95,34 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
   auto buy_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::BUY)].begin();
   auto sell_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::SELL)].begin();
   auto company_buy_orders_it = buy_companies_it->second.begin();
-  auto company_sell_orders_it = sell_companies_it->second.begin();  
+  auto company_sell_orders_it = sell_companies_it->second.begin();
   
   // TODO: check here!
   auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it, 
       std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companies_it,
-      const OrderSide side,     
-      const std::string& other_side_company_name) {            
+      const OrderSide side,
+      const std::string& other_side_company_name) {
     it++;
+
+    std::decay_t<decltype(it)> not_visited_it = it;
+    std::decay_t<decltype(companies_it)> not_visit_company_it = companies_it;
+
     size_t rotation = 0;
     while (companies_it->first == other_side_company_name || it == companies_it->second.end()) {
       companies_it++;
       if (companies_it == orders_by_companies[static_cast<size_t>(side)].end()) {
         companies_it = orders_by_companies[static_cast<size_t>(side)].begin();
       }
+      if (last_visited_order[static_cast<size_t>(side)][companies_it->first].first != companies_it->second.end()) {
+        not_visit_company_it = companies_it;
+        not_visited_it = last_visited_order[static_cast<size_t>(side)][companies_it->first].first;        
+      }
       it = last_visited_order[static_cast<size_t>(side)][companies_it->first].first;
 
       rotation++;
-      if (rotation == orders_by_companies.size()) {
+      if (rotation == orders_by_companies[static_cast<size_t>(side)].size()) {
+        it = not_visited_it;
+        companies_it = not_visit_company_it;
        return false;
       }
     }
@@ -137,12 +152,12 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
         qty_remaining = buy_order_ptr->qty();
       }
 
-      unsigned int qty_to_be_considered = (qty_remaining > 0 ? sell_order_ptr->qty() : buy_order_ptr->qty());
+      int32_t qty_to_be_considered = (qty_remaining > 0 ? sell_order_ptr->qty() : buy_order_ptr->qty());
       int sign = (qty_remaining > 0 ? 1 : -1);
 
-      matching_size += std::min(static_cast<unsigned int>(sign*qty_remaining), qty_to_be_considered);
+      matching_size += std::min(sign*qty_remaining, qty_to_be_considered);
 
-      if (qty_remaining - sign*qty_to_be_considered >= 0) {
+      if ((qty_remaining - sign*qty_to_be_considered) >= 0) {
         last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].second = 
             qty_remaining - sign*qty_to_be_considered;
         last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].first++;
@@ -154,7 +169,7 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
           continue;
         }
       }
-      if (qty_remaining - sign*qty_to_be_considered <= 0) {
+      if ((qty_remaining - sign*qty_to_be_considered) <= 0) {
         last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].second = 
             qty_remaining - sign*qty_to_be_considered;
         last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].first++;
