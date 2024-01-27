@@ -76,9 +76,12 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
     }
   }  
   
-  std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>::iterator> last_visited_sell_order;
-  for (auto& [company, orders] :  orders_by_companies[static_cast<size_t>(OrderSide::SELL)]) {
-    last_visited_sell_order[company] = orders.begin();
+  std::array<std::unordered_map<CompanyName, std::pair<std::vector<std::weak_ptr<Order>>::iterator, unsigned int>>, 2>
+      last_visited_order;
+  for (size_t i = 0; i < 2; i++) {
+    for (auto& [company, orders] :  orders_by_companies[i]) {
+      last_visited_order[i][company] = std::make_pair(orders.begin(), 0);
+    }
   }
 
   auto buy_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::BUY)].begin();
@@ -86,27 +89,26 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
   auto company_buy_orders_it = buy_companies_it->second.begin();
   auto company_sell_orders_it = sell_companies_it->second.begin();  
   
+  // TODO: check here!
   auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it, 
       std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companies_it,
-      const OrderSide side,
-      const bool check_for_company_name,      
-      const std::string& buy_company = "") {
+      const OrderSide side,     
+      const std::string& other_side_company_name) {            
+    it++;
     size_t rotation = 0;
-    while ((check_for_company_name && companies_it->first == buy_company) || 
-        last_visited_sell_order[companies_it->first] == companies_it->second.end()) {
+    while (companies_it->first == other_side_company_name || it == companies_it->second.end()) {
+      companies_it++;
       if (companies_it == orders_by_companies[static_cast<size_t>(side)].end()) {
         companies_it = orders_by_companies[static_cast<size_t>(side)].begin();
-      } else {
-        companies_it++;
       }
-      
+      it = last_visited_order[static_cast<size_t>(side)][companies_it->first].first;
+
       rotation++;
       if (rotation == orders_by_companies.size()) {
        return false;
       }
     }
 
-    it = last_visited_sell_order[companies_it->first];
     return true;
   };
 
@@ -116,7 +118,7 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
   auto sell_order_ptr = company_sell_orders_it->lock();
   if (buy_order_ptr && sell_order_ptr) { 
     if (buy_order_ptr->company() == sell_order_ptr->company()) {
-      auto is_valid = makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, true, sell_companies_it->first);
+      auto is_valid = makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first);
       if (!is_valid) {
         return 0;
       }
@@ -137,17 +139,31 @@ unsigned int Cache::getMatchingSizeForSecurity(const SecId& security_id) {
       matching_size += std::min(static_cast<unsigned int>(sign*qty_remaining), qty_to_be_considered);
 
       if (qty_remaining - sign*qty_to_be_considered >= 0) {
-        if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, true, sell_companies_it->first)) {
-          break;
+        last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].second = 
+            qty_remaining - sign*qty_to_be_considered;
+        last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].first++;
+        if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first)) {
+          if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, sell_companies_it->first)) {
+            break;
+          }
+          qty_remaining = last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].second;
+          continue;
         }
       }
       if (qty_remaining - sign*qty_to_be_considered <= 0) {
-        if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, false)) {
-          break;
+        last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].second = 
+            qty_remaining - sign*qty_to_be_considered;
+        last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].first++;
+        if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, sell_companies_it->first)) {
+          if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first)) {
+            break;            
+          }
+          qty_remaining = last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].second;
+          continue;
         }
       }
       
-      qty_remaining -= sign*qty_to_be_considered;
+      qty_remaining -= sign*qty_to_be_considered;      
     }
   }
 
