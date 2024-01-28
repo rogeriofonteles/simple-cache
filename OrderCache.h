@@ -75,6 +75,9 @@ class OrderCacheInterface
 
 };
 
+
+constexpr const size_t SIDE_SIZE = 2;
+
 // Provide an implementation for the OrderCacheInterface interface class.
 // Your implementation class should hold all relevant data structures you think
 // are needed.
@@ -103,15 +106,15 @@ class OrderCache : public OrderCacheInterface
   std::vector<Order> getAllOrders() const override;
 
  private:  
-  size_t toOrderSide(const std::string& side_str);
+  size_t toOrderSide(const std::string& sideStr);
 
   // Indexes  
   std::unordered_map<UserName, 
-      std::unordered_map<OrderId, std::weak_ptr<Order>>> m_user_index;
+      std::unordered_map<OrderId, std::weak_ptr<Order>>> m_userIndex;
   std::unordered_map<SecId, 
-      std::array<std::unordered_map<OrderId, std::weak_ptr<Order>>, 2>> m_security_index;
+      std::array<std::unordered_map<OrderId, std::weak_ptr<Order>>, SIDE_SIZE>> m_securityIndex;
   // Order Storage
-  std::unordered_map<OrderId, std::shared_ptr<Order>> m_order_map;
+  std::unordered_map<OrderId, std::shared_ptr<Order>> m_orderMap;
   // Mutex
   mutable std::mutex mtx;
 };

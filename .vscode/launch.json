@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "/home/rogerio/Projects/traderweb-test/build/order_tests",
             "args": [],
-            "stopAtEntry": true,
+            "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
             "externalConsole": false,

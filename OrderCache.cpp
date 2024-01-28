@@ -4,140 +4,147 @@
 #include <algorithm>
 
 size_t OrderCache::toOrderSide(const std::string& sideStr) {
-  std::string lower_case_side_str;
-  std::transform(sideStr.begin(), sideStr.end(), std::back_inserter(lower_case_side_str), ::tolower);
+  std::string lowerCaseSideStr;
+  std::transform(sideStr.begin(), sideStr.end(), std::back_inserter(lowerCaseSideStr), ::tolower);
 
-  if (lower_case_side_str == "buy") return static_cast<size_t>(OrderSide::BUY);
-  if (lower_case_side_str == "sell") return static_cast<size_t>(OrderSide::SELL);
+  if (lowerCaseSideStr == "buy") return static_cast<size_t>(OrderSide::BUY);
+  if (lowerCaseSideStr == "sell") return static_cast<size_t>(OrderSide::SELL);
   else throw std::exception();
 }
 
 void OrderCache::addOrder(Order order) {
   std::lock_guard<std::mutex> lck(mtx);
 
-  auto order_ptr = std::make_shared<Order>(std::move(order));
-  m_order_map[order_ptr->orderId()] = order_ptr;
-  m_user_index[order_ptr->user()][order_ptr->orderId()] = order_ptr;
-  m_security_index[order_ptr->securityId()][toOrderSide(order_ptr->side())][order_ptr->orderId()] = order_ptr;
+  auto orderPtr = std::make_shared<Order>(std::move(order));
+  m_orderMap[orderPtr->orderId()] = orderPtr;
+  m_userIndex[orderPtr->user()][orderPtr->orderId()] = orderPtr;
+  m_securityIndex[orderPtr->securityId()][toOrderSide(orderPtr->side())][orderPtr->orderId()] = orderPtr;
 }
 
 void OrderCache::cancelOrder(const std::string& orderId) {
   std::lock_guard<std::mutex> lck(mtx);
 
-  auto user_id = m_order_map[orderId]->user();
-  auto sec_id = m_order_map[orderId]->securityId();
-  auto order_side = m_order_map[orderId]->side();
+  auto orderIt = m_orderMap.find(orderId);
+  if (orderIt == m_orderMap.end()) {
+    return;
+  }
 
-  m_user_index[user_id].erase(orderId);
-  m_security_index[sec_id][toOrderSide(order_side)].erase(orderId);
-  m_order_map.erase(orderId);
+  auto userId = orderIt->second->user();
+  auto secId = orderIt->second->securityId();
+  auto orderSide = orderIt->second->side();
+
+  m_userIndex.at(userId).erase(orderId);
+  m_securityIndex.at(secId).at(toOrderSide(orderSide)).erase(orderId);
+  m_orderMap.erase(orderId);
 }
 
 void OrderCache::cancelOrdersForUser(const std::string& user) {
   std::lock_guard<std::mutex> lck(mtx);
 
-  const auto& user_order_map = m_user_index[user];
-  for (const auto& [order_id, order_weak_ptr]: user_order_map) {
-    auto order_shared_ptr = order_weak_ptr.lock();
-    if (order_shared_ptr) {
-      m_security_index[order_shared_ptr->securityId()]
-          [toOrderSide(order_shared_ptr->side())].erase(order_id);
+  const auto& userOrderMap = m_userIndex.at(user);
+  for (const auto& [orderId, orderWeakPtr]: userOrderMap) {
+    auto orderSharedPtr = orderWeakPtr.lock();
+    if (orderSharedPtr) {
+      m_securityIndex.at(orderSharedPtr->securityId()).at(toOrderSide(orderSharedPtr->side())).erase(orderId);
     }
-    m_order_map.erase(order_id);
+    m_orderMap.erase(orderId);
   }
-  m_user_index.erase(user);
+  m_userIndex.erase(user);
 }
 
 void OrderCache::cancelOrdersForSecIdWithMinimumQty(const std::string& securityId, unsigned int minQty) {
   std::lock_guard<std::mutex> lck(mtx);
   
-  for (auto& orders_by_side : m_security_index[securityId]) {
-    for (auto order_info_it = orders_by_side.begin(); order_info_it != orders_by_side.end();) {
-      auto order_ptr = order_info_it->second.lock();
-      if (order_ptr && order_ptr->qty() >= minQty) {
-        m_user_index[order_ptr->user()].erase(order_ptr->orderId());
-        m_order_map.erase(order_ptr->orderId());
-        order_info_it = orders_by_side.erase(order_info_it);
+  for (auto& ordersBySide : m_securityIndex.at(securityId)) {
+    for (auto orderInfoIt = ordersBySide.begin(); orderInfoIt != ordersBySide.end();) {
+      auto orderPtr = orderInfoIt->second.lock();
+      if (orderPtr && orderPtr->qty() >= minQty) {
+        m_userIndex.at(orderPtr->user()).erase(orderPtr->orderId());
+        m_orderMap.erase(orderPtr->orderId());
+        orderInfoIt = ordersBySide.erase(orderInfoIt);
       } else {
-        order_info_it++;
+        orderInfoIt++;
       }
     }
   }
 }
 
 unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityId) {
-  unsigned int matching_size = 0;
+  unsigned int matchingSize = 0;
 
   using CompanyName = std::string;
-  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, 2> orders_by_companies;  
+  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, SIDE_SIZE> ordersByCompanies;  
 
-  for (auto& orders_by_side : m_security_index[securityId]) {
-    for (auto& [_, order_wptr] : orders_by_side) {
-      auto order_ptr = order_wptr.lock();
-      if (order_ptr) {
-        orders_by_companies[toOrderSide(order_ptr->side())][order_ptr->company()].emplace_back(order_ptr);
+  std::lock_guard<std::mutex> lck(mtx);
+
+  for (auto& ordersBySide : m_securityIndex[securityId]) {
+    for (auto& [_, orderWptr] : ordersBySide) {
+      auto orderPtr = orderWptr.lock();
+      if (orderPtr) {
+        ordersByCompanies[toOrderSide(orderPtr->side())][orderPtr->company()].emplace_back(orderPtr);
       }
     }
   }
 
-  if (orders_by_companies[static_cast<size_t>(OrderSide::BUY)].size() == 0 || 
-      orders_by_companies[static_cast<size_t>(OrderSide::SELL)].size() == 0) {
+  if (ordersByCompanies[static_cast<size_t>(OrderSide::BUY)].size() == 0 || 
+      ordersByCompanies[static_cast<size_t>(OrderSide::SELL)].size() == 0) {
     return 0;
   }
-  
-  std::array<std::unordered_map<CompanyName, std::pair<std::vector<std::weak_ptr<Order>>::iterator, int>>, 2>
-      last_visited_order;
-  for (size_t i = 0; i < 2; i++) {
-    for (auto& [company, orders] :  orders_by_companies[i]) {
-      last_visited_order[i][company] = std::make_pair(orders.begin(), 0);
+
+  std::array<std::unordered_map<CompanyName, std::pair<std::vector<std::weak_ptr<Order>>::iterator, int>>, SIDE_SIZE>
+      lastVisitedOrder;
+  for (size_t i = 0; i < SIDE_SIZE; i++) {
+    for (auto& [company, orders] :  ordersByCompanies[i]) {
+      lastVisitedOrder[i][company] = std::make_pair(orders.begin(), 0);
     }
   }
 
-  auto buy_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::BUY)].begin();
-  auto sell_companies_it = orders_by_companies[static_cast<size_t>(OrderSide::SELL)].begin();
-  auto company_buy_orders_it = buy_companies_it->second.begin();
-  auto company_sell_orders_it = sell_companies_it->second.begin();  
+  auto buyCompaniesIt = ordersByCompanies[static_cast<size_t>(OrderSide::BUY)].begin();
+  auto sellCompaniesIt = ordersByCompanies[static_cast<size_t>(OrderSide::SELL)].begin();
+  auto companyBuyOrdersIt = buyCompaniesIt->second.begin();
+  auto companySellOrdersIt = sellCompaniesIt->second.begin();
   
   auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it, 
-      std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companies_it,
+      std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companiesIt,
       const OrderSide side,
-      const std::string& other_side_company_name) {
+      const std::string& otherSideCompanyName) {
     it++;
 
-    std::decay_t<decltype(it)> not_visited_it = {};
-    std::decay_t<decltype(companies_it)> not_visit_company_it = {};
+    std::decay_t<decltype(it)> notVisitedIt = {};
+    std::decay_t<decltype(companiesIt)> notVisitCompanyIt = {};
 
     size_t rotation = 0;
-    while (companies_it->first == other_side_company_name || it == companies_it->second.end()) {
-      companies_it++;
-      if (companies_it == orders_by_companies[static_cast<size_t>(side)].end()) {
-        companies_it = orders_by_companies[static_cast<size_t>(side)].begin();
+    while (companiesIt->first == otherSideCompanyName || it == companiesIt->second.end()) {
+      companiesIt++;
+      if (companiesIt == ordersByCompanies[static_cast<size_t>(side)].end()) {
+        companiesIt = ordersByCompanies[static_cast<size_t>(side)].begin();
       }
-      if (last_visited_order[static_cast<size_t>(side)][companies_it->first].first != companies_it->second.end()) {
-        not_visit_company_it = companies_it;
-        not_visited_it = last_visited_order[static_cast<size_t>(side)][companies_it->first].first;        
+      auto& lastVisitedOrderForCurrentCompany = lastVisitedOrder[static_cast<size_t>(side)].at(companiesIt->first).first;
+      if (lastVisitedOrderForCurrentCompany != companiesIt->second.end()) {
+        notVisitCompanyIt = companiesIt;
+        notVisitedIt = lastVisitedOrderForCurrentCompany;
       }
-      it = last_visited_order[static_cast<size_t>(side)][companies_it->first].first;
+      it = lastVisitedOrderForCurrentCompany;
 
       rotation++;
-      if (rotation == orders_by_companies[static_cast<size_t>(side)].size()) {
-        it = not_visited_it;
-        companies_it = not_visit_company_it;
-       return false;
+      if (rotation == ordersByCompanies[static_cast<size_t>(side)].size()) {
+        it = notVisitedIt;
+        companiesIt = notVisitCompanyIt;
+        return false;
       }
     }
 
     return true;
   };
 
-  
-  int32_t qty_remaining = 0;
-  auto buy_order_ptr = company_buy_orders_it->lock();
-  auto sell_order_ptr = company_sell_orders_it->lock();
-  if (buy_order_ptr && sell_order_ptr) { 
-    if (buy_order_ptr->company() == sell_order_ptr->company()) {      
-      if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first)) {
-        if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, sell_companies_it->first)) {
+
+  int32_t qtyRemaining = 0;
+  auto buyOrderPtr = companyBuyOrdersIt->lock();
+  auto sellOrderPtr = companySellOrdersIt->lock();
+  if (buyOrderPtr && sellOrderPtr) {
+    if (buyOrderPtr->company() == sellOrderPtr->company()) {
+      if (!makeValidAdvance(companySellOrdersIt, sellCompaniesIt, OrderSide::SELL, buyCompaniesIt->first)) {
+        if (!makeValidAdvance(companyBuyOrdersIt, buyCompaniesIt, OrderSide::BUY, sellCompaniesIt->first)) {
           return 0;
         }
       }
@@ -145,58 +152,58 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
   }
 
   while (true) {    
-    buy_order_ptr = company_buy_orders_it->lock();
-    sell_order_ptr = company_sell_orders_it->lock();
+    buyOrderPtr = companyBuyOrdersIt->lock();
+    sellOrderPtr = companySellOrdersIt->lock();
     
-    if (buy_order_ptr && sell_order_ptr) { 
-      if (qty_remaining == 0) {
-        qty_remaining = buy_order_ptr->qty();
+    if (buyOrderPtr && sellOrderPtr) { 
+      if (qtyRemaining == 0) {
+        qtyRemaining = buyOrderPtr->qty();
       }
 
-      int32_t qty_to_be_considered = (qty_remaining > 0 ? sell_order_ptr->qty() : buy_order_ptr->qty());
-      int sign = (qty_remaining > 0 ? 1 : -1);
+      int32_t qtyToBeConsidered = (qtyRemaining > 0 ? sellOrderPtr->qty() : buyOrderPtr->qty());
+      int sign = (qtyRemaining > 0 ? 1 : -1);
 
-      matching_size += std::min(sign*qty_remaining, qty_to_be_considered);
+      matchingSize += std::min(sign*qtyRemaining, qtyToBeConsidered);
 
-      if ((qty_remaining - sign*qty_to_be_considered) >= 0) {
-        last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].second = 
-            qty_remaining - sign*qty_to_be_considered;
-        last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].first++;
-        if (!makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first)) {
-          if (company_sell_orders_it == std::vector<std::weak_ptr<Order>>::iterator{} || 
-              !makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, sell_companies_it->first)) {
+      if ((qtyRemaining - sign*qtyToBeConsidered) >= 0) {
+        lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)].at(buyCompaniesIt->first).second = 
+            qtyRemaining - sign*qtyToBeConsidered;
+        lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)].at(sellCompaniesIt->first).first++;
+        if (!makeValidAdvance(companySellOrdersIt, sellCompaniesIt, OrderSide::SELL, buyCompaniesIt->first)) {
+          if (companySellOrdersIt == std::vector<std::weak_ptr<Order>>::iterator{} || 
+              !makeValidAdvance(companyBuyOrdersIt, buyCompaniesIt, OrderSide::BUY, sellCompaniesIt->first)) {
             break;
           }
-          qty_remaining = last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].second;
+          qtyRemaining = lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)][sellCompaniesIt->first].second;
           continue;
         }
       }
-      if ((qty_remaining - sign*qty_to_be_considered) <= 0) {
-        last_visited_order[static_cast<size_t>(OrderSide::SELL)][sell_companies_it->first].second = 
-            qty_remaining - sign*qty_to_be_considered;
-        last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].first++;
-        if (!makeValidAdvance(company_buy_orders_it, buy_companies_it, OrderSide::BUY, sell_companies_it->first)) {
-          if (company_buy_orders_it == std::vector<std::weak_ptr<Order>>::iterator{} || 
-              !makeValidAdvance(company_sell_orders_it, sell_companies_it, OrderSide::SELL, buy_companies_it->first)) {
+      if ((qtyRemaining - sign*qtyToBeConsidered) <= 0) {
+        lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)].at(sellCompaniesIt->first).second = 
+            qtyRemaining - sign*qtyToBeConsidered;
+        lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)].at(buyCompaniesIt->first).first++;
+        if (!makeValidAdvance(companyBuyOrdersIt, buyCompaniesIt, OrderSide::BUY, sellCompaniesIt->first)) {
+          if (companyBuyOrdersIt == std::vector<std::weak_ptr<Order>>::iterator{} || 
+              !makeValidAdvance(companySellOrdersIt, sellCompaniesIt, OrderSide::SELL, buyCompaniesIt->first)) {
             break;
           }
-          qty_remaining = last_visited_order[static_cast<size_t>(OrderSide::BUY)][buy_companies_it->first].second;
+          qtyRemaining = lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)][buyCompaniesIt->first].second;
           continue;
         }
       }
-      
-      qty_remaining -= sign*qty_to_be_considered;      
+
+      qtyRemaining -= sign*qtyToBeConsidered;
     }
   }
 
-  return matching_size;
+  return matchingSize;
 }
 
 std::vector<Order> OrderCache::getAllOrders() const {
   std::lock_guard<std::mutex> lck(mtx);
 
   std::vector<Order> orders;
-  std::transform(m_order_map.begin(), m_order_map.end(), std::back_inserter(orders), 
+  std::transform(m_orderMap.begin(), m_orderMap.end(), std::back_inserter(orders), 
       [](const auto& pair){
         return *(pair.second);
       });
