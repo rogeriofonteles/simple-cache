@@ -145,7 +145,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
 
     return true;
   };
-  
+
   auto buyOrderPtr = companyBuyOrdersIt->lock();
   auto sellOrderPtr = companySellOrdersIt->lock();
   if (buyOrderPtr && sellOrderPtr) {
@@ -157,7 +157,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
       }
     }
   }
-  
+
   int32_t qtyRemaining = 0;
   while (true) {
     buyOrderPtr = companyBuyOrdersIt->lock();
@@ -211,7 +211,7 @@ std::vector<Order> OrderCache::getAllOrders() const {
   std::lock_guard<std::mutex> lck(mtx);
 
   std::vector<Order> orders;
-  std::transform(m_orderMap.begin(), m_orderMap.end(), std::back_inserter(orders), 
+  std::transform(m_orderMap.begin(), m_orderMap.end(), std::back_inserter(orders),
       [](const auto& pair){
         return *(pair.second);
       });
