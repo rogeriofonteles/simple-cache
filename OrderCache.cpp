@@ -145,9 +145,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
 
     return true;
   };
-
-
-  int32_t qtyRemaining = 0;
+  
   auto buyOrderPtr = companyBuyOrdersIt->lock();
   auto sellOrderPtr = companySellOrdersIt->lock();
   if (buyOrderPtr && sellOrderPtr) {
@@ -159,7 +157,8 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
       }
     }
   }
-
+  
+  int32_t qtyRemaining = 0;
   while (true) {
     buyOrderPtr = companyBuyOrdersIt->lock();
     sellOrderPtr = companySellOrdersIt->lock();
@@ -170,7 +169,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
       }
 
       int32_t qtyToBeConsidered = (qtyRemaining > 0 ? sellOrderPtr->qty() : buyOrderPtr->qty());
-      int sign = (qtyRemaining > 0 ? 1 : -1);
+      const int8_t sign = (qtyRemaining > 0 ? 1 : -1);
 
       matchingSize += std::min(sign*qtyRemaining, qtyToBeConsidered);
 
