@@ -24,14 +24,14 @@ void OrderCache::addOrder(Order order) {
 void OrderCache::cancelOrder(const std::string& orderId) {
   std::lock_guard<std::mutex> lck(mtx);
 
-  auto orderIt = m_orderMap.find(orderId);
-  if (orderIt == m_orderMap.end()) {
+  const auto& orderMapIt = m_orderMap.find(orderId);
+  if (orderMapIt == m_orderMap.end()) {
     return;
   }
 
-  auto userId = orderIt->second->user();
-  auto secId = orderIt->second->securityId();
-  auto orderSide = orderIt->second->side();
+  const auto userId = orderMapIt->second->user();
+  const auto secId = orderMapIt->second->securityId();
+  const auto orderSide = orderMapIt->second->side();
 
   m_userIndex.at(userId).erase(orderId);
   m_securityIndex.at(secId).at(toOrderSide(orderSide)).erase(orderId);
@@ -41,8 +41,12 @@ void OrderCache::cancelOrder(const std::string& orderId) {
 void OrderCache::cancelOrdersForUser(const std::string& user) {
   std::lock_guard<std::mutex> lck(mtx);
 
-  const auto& userOrderMap = m_userIndex.at(user);
-  for (const auto& [orderId, orderWeakPtr]: userOrderMap) {
+  const auto& userOrderMapIt = m_userIndex.find(user);
+  if (userOrderMapIt == m_userIndex.end()) {
+    return;
+  }
+
+  for (const auto& [orderId, orderWeakPtr]: userOrderMapIt->second) {
     auto orderSharedPtr = orderWeakPtr.lock();
     if (orderSharedPtr) {
       m_securityIndex.at(orderSharedPtr->securityId()).at(toOrderSide(orderSharedPtr->side())).erase(orderId);
@@ -55,7 +59,12 @@ void OrderCache::cancelOrdersForUser(const std::string& user) {
 void OrderCache::cancelOrdersForSecIdWithMinimumQty(const std::string& securityId, unsigned int minQty) {
   std::lock_guard<std::mutex> lck(mtx);
   
-  for (auto& ordersBySide : m_securityIndex.at(securityId)) {
+  const auto& securityOrderMapIt = m_securityIndex.find(securityId);
+  if (securityOrderMapIt == m_securityIndex.end()) {
+    return;
+  }
+
+  for (auto& ordersBySide : securityOrderMapIt->second) {
     for (auto orderInfoIt = ordersBySide.begin(); orderInfoIt != ordersBySide.end();) {
       auto orderPtr = orderInfoIt->second.lock();
       if (orderPtr && orderPtr->qty() >= minQty) {
@@ -73,7 +82,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
   unsigned int matchingSize = 0;
 
   using CompanyName = std::string;
-  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, SIDE_SIZE> ordersByCompanies;  
+  std::array<std::unordered_map<CompanyName, std::vector<std::weak_ptr<Order>>>, SIDE_SIZE> ordersByCompanies;
 
   std::lock_guard<std::mutex> lck(mtx);
 
@@ -86,7 +95,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
     }
   }
 
-  if (ordersByCompanies[static_cast<size_t>(OrderSide::BUY)].size() == 0 || 
+  if (ordersByCompanies[static_cast<size_t>(OrderSide::BUY)].size() == 0 ||
       ordersByCompanies[static_cast<size_t>(OrderSide::SELL)].size() == 0) {
     return 0;
   }
@@ -103,10 +112,10 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
   auto sellCompaniesIt = ordersByCompanies[static_cast<size_t>(OrderSide::SELL)].begin();
   auto companyBuyOrdersIt = buyCompaniesIt->second.begin();
   auto companySellOrdersIt = sellCompaniesIt->second.begin();
-  
-  auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it, 
+
+  auto makeValidAdvance = [&](std::vector<std::weak_ptr<Order>>::iterator& it,
       std::unordered_map<std::string, std::vector<std::weak_ptr<Order>>>::iterator& companiesIt,
-      const OrderSide side,
+      const OrderSide& side,
       const std::string& otherSideCompanyName) {
     it++;
 
@@ -151,11 +160,11 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
     }
   }
 
-  while (true) {    
+  while (true) {
     buyOrderPtr = companyBuyOrdersIt->lock();
     sellOrderPtr = companySellOrdersIt->lock();
     
-    if (buyOrderPtr && sellOrderPtr) { 
+    if (buyOrderPtr && sellOrderPtr) {
       if (qtyRemaining == 0) {
         qtyRemaining = buyOrderPtr->qty();
       }
@@ -166,7 +175,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
       matchingSize += std::min(sign*qtyRemaining, qtyToBeConsidered);
 
       if ((qtyRemaining - sign*qtyToBeConsidered) >= 0) {
-        lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)].at(buyCompaniesIt->first).second = 
+        lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)].at(buyCompaniesIt->first).second =
             qtyRemaining - sign*qtyToBeConsidered;
         lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)].at(sellCompaniesIt->first).first++;
         if (!makeValidAdvance(companySellOrdersIt, sellCompaniesIt, OrderSide::SELL, buyCompaniesIt->first)) {
@@ -179,7 +188,7 @@ unsigned int OrderCache::getMatchingSizeForSecurity(const std::string& securityI
         }
       }
       if ((qtyRemaining - sign*qtyToBeConsidered) <= 0) {
-        lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)].at(sellCompaniesIt->first).second = 
+        lastVisitedOrder[static_cast<size_t>(OrderSide::SELL)].at(sellCompaniesIt->first).second =
             qtyRemaining - sign*qtyToBeConsidered;
         lastVisitedOrder[static_cast<size_t>(OrderSide::BUY)].at(buyCompaniesIt->first).first++;
         if (!makeValidAdvance(companyBuyOrdersIt, buyCompaniesIt, OrderSide::BUY, sellCompaniesIt->first)) {
