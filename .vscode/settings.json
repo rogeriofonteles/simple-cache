@@ -1,4 +1,6 @@
 {
+    "clang-format.executable": "/usr/bin/clang-format-12",
+    "editor.formatOnSave": true,
     "files.associations": {
         "cctype": "cpp",
         "clocale": "cpp",

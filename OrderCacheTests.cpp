@@ -1,6 +1,7 @@
 #include <iostream>
-#include <string>
 #include <sstream>
+#include <string>
+
 #include "OrderCache.h"
 #include "gtest/gtest.h"
 
